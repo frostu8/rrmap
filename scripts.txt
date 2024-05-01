@@ -1,0 +1,60 @@
+#include "rrcommon.acs"
+
+int girderHeight = 0;
+bool crane_activated = FALSE;
+
+script "LapStart" LAP
+{
+	// Obligatory TagWait to check if it's already moving <Commented out due to logic changes>
+	//TagWait(1);
+
+	//if (girderHeight > 128)
+	//{
+		//cap at 128!
+	//	return;
+	//}
+
+	// check if the crane has been activated, and if so, return here instead of triggering crane again.
+	if (crane_activated)
+	{
+		return;
+	}
+
+	// check if the lowest player's lap is 3, the final lap
+	if (LowestLap() == 3)
+	{
+		// mark the crane as activated, so it can't be triggered again.
+		crane_activated = TRUE;
+
+		// Wait for one second, so that the crane movement and sound doesn't overlap the lap effects
+		Delay(TICRATE);
+
+		//move the girder!
+		//8010 floor
+		Sector_MovePlanes(8010, PLANE_FLOOR, 128, 8);
+		//8010 ceiling
+		Sector_MovePlanes(8010, PLANE_CEILING, 128, 8);
+
+		//8011 floor
+		Sector_MovePlanes(8011, PLANE_FLOOR, 128, 8);
+		//8011 ceiling
+		Sector_MovePlanes(8011, PLANE_CEILING, 128, 8);
+
+		//8012 floor
+		Sector_MovePlanes(8012, PLANE_FLOOR, 128, 8);
+		//8012 ceiling
+		Sector_MovePlanes(8012, PLANE_CEILING, 128, 8);
+
+		//8013 floor
+		Sector_MovePlanes(8013, PLANE_FLOOR, 128, 8);
+
+		//set girderHeight variable to max
+		girderHeight += 128;
+
+		//turn on crane work sign
+		SetLineTexture(800, SIDE_FRONT, TEXTURE_MIDDLE, "NDCRS1");
+
+		//play a sound
+		PlaySFX("sfx_s3kd0s", SFX_SOURCE_NOWHERE, SFX_LISTEN_EVERYONE);
+	}
+}

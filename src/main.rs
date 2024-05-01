@@ -36,7 +36,7 @@ fn main() {
 
             let map = Map::from_str(text);
 
-            println!("Map: {:?}", map);
+            //println!("Map: {:?}", map);
         }
     }
 }
