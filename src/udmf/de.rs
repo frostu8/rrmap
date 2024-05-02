@@ -20,7 +20,18 @@ impl<'de> Tokenizer<'de> {
         // skip any whitespace
         self.skip_whitespace();
 
-        self.next_char().and_then(|ch| Token::try_from(ch))
+        let out = self.peek_char().and_then(|ch| Token::try_from(ch));
+
+        match out {
+            Ok(token) => {
+                self.next_char().expect("valid read");
+                Ok(token)
+            }
+            Err(_err) => {
+                // try reading it as an ident
+                Ok(Token::Ident(self.next_ident()?))
+            }
+        }
     }
 
     /// Returns the next value.
@@ -63,19 +74,38 @@ impl<'de> Tokenizer<'de> {
             // skip over quote
             self.input = &self.input[(end + '"'.len_utf8())..];
 
-            Ok(Value::String(output.to_owned()))
-        } else if ch.is_ascii_digit() {
+            Ok(Value::String(unescape_string(output)))
+        } else if ch.is_ascii_digit() || matches!(ch, '+' | '-') {
             // this is the start of an unsigned/hex integer
-            self.read_int()
+            self.read_number()
         } else {
-            todo!()
+            // TODO: this cannot read hex numbers, but that's fine for now
+            // since it's a readability thing and I don't think anyone is
+            // writing udmfs by hand
+
+            // this is a keyword
+            let end = self
+                .input
+                .find(&['^', '{', '}', '(', ')', ';', '"', '\'', '\n', '\t', ' '])
+                .unwrap_or_else(|| self.input.len());
+
+            let keyword = &self.input[..end];
+            self.input = &self.input[end..];
+
+            match keyword {
+                "true" => Ok(Value::Boolean(true)),
+                "false" => Ok(Value::Boolean(false)),
+                _ => Err(Error {
+                    kind: ErrorKind::InvalidKeyword(keyword.to_owned()),
+                }),
+            }
         }
     }
 
     /// Returns the next identifier.
-    pub fn next_ident(&mut self) -> Result<&'de str, Error> {
+    fn next_ident(&mut self) -> Result<&'de str, Error> {
         // skip any whitespace
-        self.skip_whitespace();
+        //self.skip_whitespace();
 
         // get next char
         let ch = self.peek_char()?;
@@ -102,7 +132,121 @@ impl<'de> Tokenizer<'de> {
         }
     }
 
-    fn read_int(&mut self) -> Result<Value, Error> {
+    fn read_number(&mut self) -> Result<Value, Error> {
+        // get sign
+        let sign = self.peek_char()?;
+
+        if matches!(sign, '+' | '-') {
+            self.next_char().expect("remaining data");
+        }
+
+        // read until nondigit character
+        let end = self
+            .input
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or_else(|| self.input.len());
+
+        let next_char = self.input[end..].chars().next();
+        if next_char == Some('.') {
+            // this is a float! read to end
+            let end = self.input[(end + '.'.len_utf8())..]
+                .find(|c: char| !c.is_ascii_digit())
+                .map(|e| e + end + '.'.len_utf8())
+                .unwrap_or_else(|| self.input.len());
+
+            // got float
+            let output = self.input[..end]
+                .parse::<f32>()
+                // the only error that can happen is if self.input == ""
+                .map_err(|_| Error {
+                    kind: self
+                        .input
+                        .chars()
+                        .next()
+                        .map(|c| ErrorKind::UnexpectedChar(c))
+                        .unwrap_or_else(|| ErrorKind::Eof),
+                })?;
+
+            // add sign
+            let output = match sign {
+                '-' => output * -1.,
+                _ => output,
+            };
+
+            // reset cursor
+            self.input = &self.input[end..];
+
+            match self.peek_char() {
+                Ok('e') | Ok('E') => {
+                    self.next_char().expect("remaining data");
+
+                    // this is an exponential
+                    let sign = self.peek_char()?;
+
+                    if matches!(sign, '+' | '-') {
+                        self.next_char().expect("remaining data");
+                    }
+
+                    // get digits
+                    let end = self
+                        .input
+                        .find(|c: char| !c.is_ascii_digit())
+                        .unwrap_or_else(|| self.input.len());
+
+                    let exp = self.input[..end]
+                        .parse::<i32>()
+                        // the only error that can happen is if self.input == ""
+                        .map_err(|_| Error {
+                            kind: self
+                                .input
+                                .chars()
+                                .next()
+                                .map(|c| ErrorKind::UnexpectedChar(c))
+                                .unwrap_or_else(|| ErrorKind::Eof),
+                        })?;
+
+                    let exp = match sign {
+                        '-' => exp * -1,
+                        _ => exp,
+                    };
+
+                    // use this as pow
+                    let output = 10f32.powi(exp) * output;
+
+                    self.input = &self.input[end..];
+                    Ok(Value::Float(output))
+                }
+                _ => {
+                    // return value as is
+                    Ok(Value::Float(output))
+                }
+            }
+        } else {
+            // vomit int
+            let output = self.input[..end]
+                .parse::<i32>()
+                // the only error that can happen is if self.input == ""
+                .map_err(|_| Error {
+                    kind: self
+                        .input
+                        .chars()
+                        .next()
+                        .map(|c| ErrorKind::UnexpectedChar(c))
+                        .unwrap_or_else(|| ErrorKind::Eof),
+                })?;
+
+            // add sign
+            let output = match sign {
+                '-' => output * -1,
+                _ => output,
+            };
+
+            self.input = &self.input[end..];
+            Ok(Value::Integer(output))
+        }
+    }
+
+    fn read_number_zero_prefix(&mut self) -> Result<Value, Error> {
         // check if this is a hex digit
         let char_after = self.input.chars().nth(1);
 
@@ -148,9 +292,52 @@ impl<'de> Tokenizer<'de> {
     }
 }
 
+/// Unescapes a string.
+pub fn unescape_string(mut s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+
+    loop {
+        let next = s.find('\\');
+
+        if let Some(next) = next {
+            // add everything up to backslash
+            out.push_str(&s[..next]);
+
+            s = &s[(next + '\\'.len_utf8())..];
+
+            // lookup table
+            let next = s.chars().next();
+
+            match next {
+                Some('"') => {
+                    // for escaping quotes
+                    out.push('"');
+                }
+                Some(ch) => {
+                    // push unedited chars
+                    out.push('\\');
+                    out.push(ch);
+                }
+                None => (),
+            }
+
+            if let Some(ch) = next {
+                s = &s[ch.len_utf8()..];
+            }
+        } else {
+            out.push_str(s);
+            break;
+        }
+    }
+
+    out
+}
+
 /// Tokens that can be produced by [`Tokenizer`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Token {
+pub enum Token<'a> {
+    /// An identifier.
+    Ident(&'a str),
     /// Acts as the division between an identifier and its assignment.
     Assignment,
     /// Seperator between assignments.
@@ -161,7 +348,7 @@ pub enum Token {
     EndBlock,
 }
 
-impl TryFrom<char> for Token {
+impl<'a> TryFrom<char> for Token<'a> {
     type Error = Error;
 
     fn try_from(value: char) -> Result<Self, Self::Error> {
@@ -206,6 +393,7 @@ impl Error {
 pub enum ErrorKind {
     UnexpectedChar(char),
     UnquotedString,
+    InvalidKeyword(String),
     Eof,
 }
 
@@ -214,6 +402,7 @@ impl Display for Error {
         match &self.kind {
             ErrorKind::UnexpectedChar(ch) => write!(f, "unexpected: '{}'", ch),
             ErrorKind::UnquotedString => write!(f, "unquoted string"),
+            ErrorKind::InvalidKeyword(st) => write!(f, "invalid keyword: \"{}\"", st),
             ErrorKind::Eof => write!(f, "got eof"),
         }
     }
@@ -226,11 +415,62 @@ mod tests {
     use super::*;
 
     #[test]
-    fn read_hex() {
-        let input = "0x005A";
+    fn read_float() {
+        let input = r#"
+        4.2
+        9.99999
+        +8.1
+        -4.0
+        2.0E-1
+        4.0E9
+        -2.0E-2
+        "#;
         let mut input = Tokenizer::new(input);
 
-        assert_eq!(input.next_value().unwrap(), Value::Integer(0x005A));
+        assert_eq!(input.next_value().unwrap(), Value::Float(4.2));
+        assert_eq!(input.next_value().unwrap(), Value::Float(9.99999));
+        assert_eq!(input.next_value().unwrap(), Value::Float(8.1));
+        assert_eq!(input.next_value().unwrap(), Value::Float(-4.0));
+        assert_eq!(input.next_value().unwrap(), Value::Float(0.2));
+        assert_eq!(input.next_value().unwrap(), Value::Float(4_000_000_000.0));
+        assert_eq!(input.next_value().unwrap(), Value::Float(-0.02));
+    }
+
+    #[test]
+    fn read_int() {
+        let input = r#"
+        -10
+        17
+        38
+        "#;
+        let mut input = Tokenizer::new(input);
+
+        assert_eq!(input.next_value().unwrap(), Value::Integer(-10));
+        assert_eq!(input.next_value().unwrap(), Value::Integer(17));
+        assert_eq!(input.next_value().unwrap(), Value::Integer(38));
+    }
+
+    #[test]
+    fn read_string() {
+        let input = r#"
+        "Hey Paisanos!"
+        "Welcome to the \"Super Mario Bros. Super Show\"!"
+        "Do Do Do Do"
+        "#;
+        let mut input = Tokenizer::new(input);
+
+        assert_eq!(
+            input.next_value().unwrap(),
+            Value::String("Hey Paisanos!".into())
+        );
+        assert_eq!(
+            input.next_value().unwrap(),
+            Value::String("Welcome to the \"Super Mario Bros. Super Show\"!".into())
+        );
+        assert_eq!(
+            input.next_value().unwrap(),
+            Value::String("Do Do Do Do".into())
+        );
     }
 
     #[test]
@@ -239,15 +479,91 @@ mod tests {
         namespace = "ringracers";
         version = 1;
         "#;
-
         let mut input = Tokenizer::new(input);
 
-        assert_eq!(input.next_ident().unwrap(), "namespace");
+        assert_eq!(input.next_token().unwrap(), Token::Ident("namespace"));
         assert_eq!(input.next_token().unwrap(), Token::Assignment);
         assert_eq!(
             input.next_value().unwrap(),
             Value::String("ringracers".into())
         );
         assert_eq!(input.next_token().unwrap(), Token::Seperator);
+    }
+
+    #[test]
+    fn read_all() {
+        // This is an example config
+        let input = r#"
+        namespace = "ringracers";
+        version = 1;
+
+        thing {
+            x = 43.0;
+            y = 459.0;
+            height = 20.0;
+            angle = 30;
+            arg0 = "WADSUP";
+            arg1 = true;
+        }
+
+        vertex {
+            x = 17.0;
+            y = 38.0;
+        }
+        "#;
+        let mut input = Tokenizer::new(input);
+
+        assert_eq!(input.next_token().unwrap(), Token::Ident("namespace"));
+        assert_eq!(input.next_token().unwrap(), Token::Assignment);
+        assert_eq!(
+            input.next_value().unwrap(),
+            Value::String("ringracers".into())
+        );
+        assert_eq!(input.next_token().unwrap(), Token::Seperator);
+
+        assert_eq!(input.next_token().unwrap(), Token::Ident("version"));
+        assert_eq!(input.next_token().unwrap(), Token::Assignment);
+        assert_eq!(input.next_value().unwrap(), Value::Integer(1));
+        assert_eq!(input.next_token().unwrap(), Token::Seperator);
+
+        assert_eq!(input.next_token().unwrap(), Token::Ident("thing"));
+        assert_eq!(input.next_token().unwrap(), Token::StartBlock);
+        assert_eq!(input.next_token().unwrap(), Token::Ident("x"));
+        assert_eq!(input.next_token().unwrap(), Token::Assignment);
+        assert_eq!(input.next_value().unwrap(), Value::Float(43.0));
+        assert_eq!(input.next_token().unwrap(), Token::Seperator);
+        assert_eq!(input.next_token().unwrap(), Token::Ident("y"));
+        assert_eq!(input.next_token().unwrap(), Token::Assignment);
+        assert_eq!(input.next_value().unwrap(), Value::Float(459.0));
+        assert_eq!(input.next_token().unwrap(), Token::Seperator);
+        assert_eq!(input.next_token().unwrap(), Token::Ident("height"));
+        assert_eq!(input.next_token().unwrap(), Token::Assignment);
+        assert_eq!(input.next_value().unwrap(), Value::Float(20.0));
+        assert_eq!(input.next_token().unwrap(), Token::Seperator);
+        assert_eq!(input.next_token().unwrap(), Token::Ident("angle"));
+        assert_eq!(input.next_token().unwrap(), Token::Assignment);
+        assert_eq!(input.next_value().unwrap(), Value::Integer(30));
+        assert_eq!(input.next_token().unwrap(), Token::Seperator);
+        assert_eq!(input.next_token().unwrap(), Token::Ident("arg0"));
+        assert_eq!(input.next_token().unwrap(), Token::Assignment);
+        assert_eq!(input.next_value().unwrap(), Value::String("WADSUP".into()));
+        assert_eq!(input.next_token().unwrap(), Token::Seperator);
+        assert_eq!(input.next_token().unwrap(), Token::Ident("arg1"));
+        assert_eq!(input.next_token().unwrap(), Token::Assignment);
+        assert_eq!(input.next_value().unwrap(), Value::Boolean(true));
+        assert_eq!(input.next_token().unwrap(), Token::Seperator);
+        assert_eq!(input.next_token().unwrap(), Token::EndBlock);
+
+        assert_eq!(input.next_token().unwrap(), Token::Ident("vertex"));
+        assert_eq!(input.next_token().unwrap(), Token::StartBlock);
+        assert_eq!(input.next_token().unwrap(), Token::Ident("x"));
+        assert_eq!(input.next_token().unwrap(), Token::Assignment);
+        assert_eq!(input.next_value().unwrap(), Value::Float(17.0));
+        assert_eq!(input.next_token().unwrap(), Token::Seperator);
+        assert_eq!(input.next_token().unwrap(), Token::Ident("y"));
+        assert_eq!(input.next_token().unwrap(), Token::Assignment);
+        assert_eq!(input.next_value().unwrap(), Value::Float(38.0));
+        assert_eq!(input.next_token().unwrap(), Token::Seperator);
+        assert_eq!(input.next_token().unwrap(), Token::EndBlock);
     }
 }

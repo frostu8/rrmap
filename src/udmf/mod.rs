@@ -29,3 +29,45 @@ pub enum Value {
     /// A nil.
     Nil,
 }
+
+impl From<bool> for Value {
+    fn from(value: bool) -> Value {
+        Value::Boolean(value)
+    }
+}
+
+impl From<i32> for Value {
+    fn from(value: i32) -> Self {
+        Value::Integer(value)
+    }
+}
+
+impl From<f32> for Value {
+    fn from(value: f32) -> Self {
+        Value::Float(value)
+    }
+}
+
+impl From<String> for Value {
+    fn from(value: String) -> Self {
+        Value::String(value)
+    }
+}
+
+impl<'a> From<&'a str> for Value {
+    fn from(value: &'a str) -> Self {
+        Value::String(value.to_owned())
+    }
+}
+
+impl<T> From<Option<T>> for Value
+where
+    T: Into<Value>,
+{
+    fn from(value: Option<T>) -> Self {
+        match value {
+            Some(t) => t.into(),
+            None => Value::Nil,
+        }
+    }
+}
