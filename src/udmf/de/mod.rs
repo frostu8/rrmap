@@ -1,10 +1,66 @@
 //! `udmf` deserialization functions and structs.
 
+mod serde_impl;
+
 use std::fmt::{self, Display, Formatter};
+
+use serde::{de::DeserializeSeed, Deserialize};
 
 use super::Value;
 
+/// `udmf` high level parser.
+pub struct Parser<'de> {
+    tokenizer: Tokenizer<'de>,
+}
+
+impl<'de> Parser<'de> {
+    /// Creates a new `Parser`.
+    pub fn new(input: &'de str) -> Parser<'de> {
+        Parser {
+            tokenizer: Tokenizer::new(input),
+        }
+    }
+
+    /// Returns the next key name.
+    ///
+    /// In `udmf`, keys can repeat.
+    pub fn next_key(&mut self) -> Result<Option<&'de str>, Error> {
+        let token = match self.tokenizer.next_token() {
+            Ok(token) => token,
+            Err(error) if error.is_eof() => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+
+        if let Token::Ident(id) = token {
+            Ok(Some(id))
+        } else {
+            Err(Error::expected_ident())
+        }
+    }
+
+    /// Returns the next value.
+    pub fn next_value_seed<T>(&mut self, seed: T) -> Result<T::Value, Error>
+    where
+        T: DeserializeSeed<'de>,
+    {
+        let deserializer = serde_impl::TopLevelDeserializer::new(&mut self.tokenizer);
+        seed.deserialize(deserializer)
+    }
+
+    /// Returns the next value.
+    pub fn next_value<T>(&mut self) -> Result<T, Error>
+    where
+        T: Deserialize<'de>,
+    {
+        let deserializer = serde_impl::TopLevelDeserializer::new(&mut self.tokenizer);
+        T::deserialize(deserializer)
+    }
+}
+
 /// `udmf` tokenizer.
+#[derive(Debug)]
 pub struct Tokenizer<'de> {
     input: &'de str,
 }
@@ -15,8 +71,13 @@ impl<'de> Tokenizer<'de> {
         Tokenizer { input }
     }
 
+    /// Peeks the next token without advancing the reader.
+    pub fn peek_token(&self) -> Result<Token<'de>, Error> {
+        Tokenizer::new(self.input).next_token()
+    }
+
     /// Returns the next token.
-    pub fn next_token(&mut self) -> Result<Token, Error> {
+    pub fn next_token(&mut self) -> Result<Token<'de>, Error> {
         // skip any whitespace
         self.skip_whitespace();
 
@@ -369,9 +430,32 @@ pub struct Error {
 }
 
 impl Error {
+    /// Checks if the error is an EOF.
+    pub fn is_eof(&self) -> bool {
+        matches!(self.kind, ErrorKind::Eof)
+    }
+
     fn eof() -> Error {
         Error {
             kind: ErrorKind::Eof,
+        }
+    }
+
+    fn expected_seperator() -> Error {
+        Error {
+            kind: ErrorKind::ExpectedSeperator,
+        }
+    }
+
+    fn expected_ident() -> Error {
+        Error {
+            kind: ErrorKind::ExpectedIdent,
+        }
+    }
+
+    fn invalid_type(val: &Value) -> Error {
+        Error {
+            kind: ErrorKind::InvalidType(val.type_name()),
         }
     }
 
@@ -394,7 +478,11 @@ pub enum ErrorKind {
     UnexpectedChar(char),
     UnquotedString,
     InvalidKeyword(String),
+    InvalidType(&'static str),
+    ExpectedIdent,
+    ExpectedSeperator,
     Eof,
+    Message(String),
 }
 
 impl Display for Error {
@@ -403,16 +491,50 @@ impl Display for Error {
             ErrorKind::UnexpectedChar(ch) => write!(f, "unexpected: '{}'", ch),
             ErrorKind::UnquotedString => write!(f, "unquoted string"),
             ErrorKind::InvalidKeyword(st) => write!(f, "invalid keyword: \"{}\"", st),
+            ErrorKind::InvalidType(kind) => write!(f, "invalid type {}", kind),
+            ErrorKind::ExpectedIdent => write!(f, "expected identifier"),
+            ErrorKind::ExpectedSeperator => write!(f, "expected seperator ';'"),
             ErrorKind::Eof => write!(f, "got eof"),
+            ErrorKind::Message(s) => f.write_str(s),
         }
     }
 }
 
 impl std::error::Error for Error {}
 
+impl serde::de::Error for Error {
+    fn custom<T>(msg: T) -> Self
+    where
+        T: Display,
+    {
+        Error {
+            kind: ErrorKind::Message(msg.to_string()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const EXAMPLE_CONFIG: &'static str = r#"
+    namespace = "ringracers";
+    version = 1;
+
+    thing {
+        x = 43.0;
+        y = 459.0;
+        height = 20.0;
+        angle = 30;
+        arg0 = "WADSUP";
+        arg1 = true;
+    }
+
+    vertex {
+        x = 17.0;
+        y = 38.0;
+    }
+    "#;
 
     #[test]
     fn read_float() {
@@ -493,25 +615,7 @@ mod tests {
     #[test]
     fn read_all() {
         // This is an example config
-        let input = r#"
-        namespace = "ringracers";
-        version = 1;
-
-        thing {
-            x = 43.0;
-            y = 459.0;
-            height = 20.0;
-            angle = 30;
-            arg0 = "WADSUP";
-            arg1 = true;
-        }
-
-        vertex {
-            x = 17.0;
-            y = 38.0;
-        }
-        "#;
-        let mut input = Tokenizer::new(input);
+        let mut input = Tokenizer::new(EXAMPLE_CONFIG);
 
         assert_eq!(input.next_token().unwrap(), Token::Ident("namespace"));
         assert_eq!(input.next_token().unwrap(), Token::Assignment);
@@ -565,5 +669,53 @@ mod tests {
         assert_eq!(input.next_value().unwrap(), Value::Float(38.0));
         assert_eq!(input.next_token().unwrap(), Token::Seperator);
         assert_eq!(input.next_token().unwrap(), Token::EndBlock);
+    }
+
+    #[test]
+    fn test_parser() {
+        let mut parser = Parser::new(EXAMPLE_CONFIG);
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Thing {
+            x: f32,
+            y: f32,
+            height: f32,
+            angle: i32,
+            arg0: String,
+            arg1: bool,
+        }
+
+        #[derive(Deserialize, Debug, PartialEq)]
+        struct Vertex {
+            x: f32,
+            y: f32,
+        }
+
+        assert_eq!(parser.next_key().unwrap(), Some("namespace"));
+        assert_eq!(parser.next_value::<String>().unwrap(), "ringracers");
+
+        assert_eq!(parser.next_key().unwrap(), Some("version"));
+        assert_eq!(parser.next_value::<i32>().unwrap(), 1);
+
+        assert_eq!(parser.next_key().unwrap(), Some("thing"));
+        assert_eq!(
+            parser.next_value::<Thing>().unwrap(),
+            Thing {
+                x: 43.0,
+                y: 459.0,
+                height: 20.0,
+                angle: 30,
+                arg0: "WADSUP".into(),
+                arg1: true,
+            }
+        );
+
+        assert_eq!(parser.next_key().unwrap(), Some("vertex"));
+        assert_eq!(
+            parser.next_value::<Vertex>().unwrap(),
+            Vertex { x: 17.0, y: 38.0 }
+        );
+
+        assert_eq!(parser.next_key().unwrap(), None);
     }
 }

@@ -12,6 +12,8 @@
 
 pub mod de;
 
+use serde::de::{Deserialize, Visitor};
+
 /// `udmf` value type.
 ///
 /// Since `udmf` is a self-describing format, we can represent every possible
@@ -28,6 +30,73 @@ pub enum Value {
     String(String),
     /// A nil.
     Nil,
+}
+
+impl Value {
+    /// Gets the name of the type contained.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::Boolean(_) => "boolean",
+            Value::Integer(_) => "integer",
+            Value::Float(_) => "float",
+            Value::String(_) => "string",
+            Value::Nil => "nil",
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Value {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ValueVisitor;
+
+        impl<'d> Visitor<'d> for ValueVisitor {
+            type Value = Value;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("udmf value")
+            }
+
+            fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Value::Boolean(v))
+            }
+
+            fn visit_i32<E>(self, v: i32) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Value::Integer(v))
+            }
+
+            fn visit_f32<E>(self, v: f32) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Value::Float(v))
+            }
+
+            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Value::String(v))
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Value::String(v.to_owned()))
+            }
+        }
+
+        deserializer.deserialize_any(ValueVisitor)
+    }
 }
 
 impl From<bool> for Value {
