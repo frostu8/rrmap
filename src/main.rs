@@ -1,8 +1,8 @@
 use std::fs::File;
 use std::io::Write;
 
+use rrmap::format::wad::Wad;
 use rrmap::map::Map;
-use rrmap::wad::Wad;
 
 fn main() {
     let file = std::env::args()
@@ -36,7 +36,7 @@ fn main() {
 
             let map = Map::from_str(text);
 
-            //println!("Map: {:?}", map);
+            println!("Map: {:?}", map);
         }
     }
 }

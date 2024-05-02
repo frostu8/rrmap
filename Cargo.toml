@@ -5,5 +5,4 @@ authors = ["Dante Helmore <frostu8@protonmail.com>"]
 edition = "2021"
 
 [dependencies]
-peg = "0.8.3"
 serde = { version = "1.0.199", features = ["derive"] }

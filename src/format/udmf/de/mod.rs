@@ -435,6 +435,13 @@ impl Error {
         matches!(self.kind, ErrorKind::Eof)
     }
 
+    /// Creates a new missing field error.
+    pub fn missing_field(field: &'static str) -> Error {
+        Error {
+            kind: ErrorKind::MissingField(field),
+        }
+    }
+
     fn eof() -> Error {
         Error {
             kind: ErrorKind::Eof,
@@ -450,12 +457,6 @@ impl Error {
     fn expected_ident() -> Error {
         Error {
             kind: ErrorKind::ExpectedIdent,
-        }
-    }
-
-    fn invalid_type(val: &Value) -> Error {
-        Error {
-            kind: ErrorKind::InvalidType(val.type_name()),
         }
     }
 
@@ -478,9 +479,9 @@ pub enum ErrorKind {
     UnexpectedChar(char),
     UnquotedString,
     InvalidKeyword(String),
-    InvalidType(&'static str),
     ExpectedIdent,
     ExpectedSeperator,
+    MissingField(&'static str),
     Eof,
     Message(String),
 }
@@ -491,9 +492,9 @@ impl Display for Error {
             ErrorKind::UnexpectedChar(ch) => write!(f, "unexpected: '{}'", ch),
             ErrorKind::UnquotedString => write!(f, "unquoted string"),
             ErrorKind::InvalidKeyword(st) => write!(f, "invalid keyword: \"{}\"", st),
-            ErrorKind::InvalidType(kind) => write!(f, "invalid type {}", kind),
             ErrorKind::ExpectedIdent => write!(f, "expected identifier"),
             ErrorKind::ExpectedSeperator => write!(f, "expected seperator ';'"),
+            ErrorKind::MissingField(field) => write!(f, "missing field: \"{}\"", field),
             ErrorKind::Eof => write!(f, "got eof"),
             ErrorKind::Message(s) => f.write_str(s),
         }

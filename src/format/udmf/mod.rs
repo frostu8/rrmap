@@ -13,6 +13,7 @@
 pub mod de;
 
 use serde::de::{Deserialize, Visitor};
+use serde::ser::Serialize;
 
 /// `udmf` value type.
 ///
@@ -41,6 +42,21 @@ impl Value {
             Value::Float(_) => "float",
             Value::String(_) => "string",
             Value::Nil => "nil",
+        }
+    }
+}
+
+impl Serialize for Value {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            Value::Boolean(v) => serializer.serialize_bool(*v),
+            Value::Integer(v) => serializer.serialize_i32(*v),
+            Value::Float(v) => serializer.serialize_f32(*v),
+            Value::String(v) => serializer.serialize_str(v),
+            Value::Nil => serializer.serialize_none(),
         }
     }
 }

@@ -1,5 +1,4 @@
 //! Ring Racers map and WAD tools.
 
+pub mod format;
 pub mod map;
-pub mod udmf;
-pub mod wad;

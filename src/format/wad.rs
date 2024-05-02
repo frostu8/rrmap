@@ -185,10 +185,11 @@ impl ByteRead for LumpInfo {
 struct LumpData(Vec<u8>);
 
 impl LumpData {
+    /*
     /// Creates a new `LumpData`.
     pub fn new(data: impl Into<Vec<u8>>) -> LumpData {
         LumpData(data.into())
-    }
+    }*/
 
     /// Creates an empty `LumpData`.
     pub fn empty() -> LumpData {
