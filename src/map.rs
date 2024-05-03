@@ -16,14 +16,14 @@ pub type Extras = HashMap<String, Value>;
 /// include textures or any other fun things!
 #[derive(Clone, Debug, Default)]
 pub struct Map {
-    namespace: String,
-    version: i32,
-    things: Vec<Thing>,
-    linedefs: Vec<LineDef>,
-    sidedefs: Vec<SideDef>,
-    sectors: Vec<Sector>,
-    vertices: Vec<Vertex>,
-    extras: Extras,
+    pub namespace: String,
+    pub version: i32,
+    pub things: Vec<Thing>,
+    pub linedefs: Vec<LineDef>,
+    pub sidedefs: Vec<SideDef>,
+    pub sectors: Vec<Sector>,
+    pub vertices: Vec<Vertex>,
+    pub extras: Extras,
 }
 
 impl Map {

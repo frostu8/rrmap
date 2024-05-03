@@ -1,42 +1,25 @@
-use std::fs::File;
-use std::io::Write;
-
+use rrmap::editor::EditorCamera;
 use rrmap::format::wad::Wad;
 use rrmap::map::Map;
+
+use bevy::prelude::*;
 
 fn main() {
     let file = std::env::args()
         .nth(1)
         .expect("Pass wad file as first argument!");
 
-    let lump = std::env::args().nth(2);
+    App::new()
+        .add_plugins(DefaultPlugins)
+        .add_plugins(rrmap::EditorPlugins)
+        .add_systems(Startup, setup)
+        .run()
+}
 
-    let mut file = File::open(file).expect("Valid file");
-    let wad = Wad::from_reader(&mut file).unwrap();
-
-    if let Some(lump_name) = lump {
-        let lump = wad.lump(lump_name).expect("No lump");
-
-        // put to stdout
-        let mut stdout = std::io::stdout();
-        stdout.write_all(lump.data()).expect("write");
-    } else {
-        println!("{:?}", wad.header());
-        print!("Lumps:");
-
-        for lump in wad.lumps() {
-            print!(" {}", lump.name());
-        }
-
-        println!();
-
-        if let Some(text) = wad.lump("TEXTMAP") {
-            // read as text
-            let text = std::str::from_utf8(text.data()).unwrap();
-
-            let map = Map::from_str(text);
-
-            println!("Map: {:?}", map);
-        }
-    }
+fn setup(mut commands: Commands) {
+    commands.spawn((
+        Camera2dBundle::default(),
+        EditorCamera,
+        // PickRaycastSource,
+    ));
 }
